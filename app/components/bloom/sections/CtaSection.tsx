@@ -5,7 +5,7 @@
 export default function CtaSection() {
   return (
     <section className="cta wrap">
-      {/* Animated big number — driven by ScrollTrigger counter in useBloomMotion */}
+      {/* Animated big number -- driven by ScrollTrigger counter in useBloomMotion */}
       <div className="big-num" data-count="2300000" data-suffix="+">0</div>
       <div className="big-num-lbl">tiny habits completed and counting</div>
 
