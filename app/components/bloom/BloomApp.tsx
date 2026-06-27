@@ -7,8 +7,6 @@ import HeroSection from './sections/HeroSection';
 import ShowcaseSection from './sections/ShowcaseSection';
 import BuilderSection from './sections/BuilderSection';
 import CtaSection from './sections/CtaSection';
-import MotionControls from './MotionControls';
-
 export default function BloomApp() {
   useBloomMotion();
 
@@ -23,8 +21,6 @@ export default function BloomApp() {
         <BuilderSection />
         <CtaSection />
       </main>
-
-      <MotionControls />
     </>
   );
 }

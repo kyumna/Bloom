@@ -68,8 +68,10 @@ export function useBloomMotion(): void {
       }
 
       // ── SMOOTH SCROLL ──────────────────────────────────────────────────────
-      if (!state.reduced) {
-        lenis = new Lenis({ duration: 1.1, smoothWheel: true, wheelMultiplier: 1, touchMultiplier: 1.6 });
+      // Skip Lenis on touch devices — native touch scroll is smooth enough,
+      // and Lenis intercepts touchmove which breaks GSAP Draggable on mobile.
+      if (!state.reduced && !isTouch) {
+        lenis = new Lenis({ duration: 1.1, smoothWheel: true, wheelMultiplier: 1 });
         lenis.on('scroll', ScrollTrigger.update);
         gsap.ticker.add((t: number) => lenis.raf(t * 1000));
         gsap.ticker.lagSmoothing(0);
@@ -482,38 +484,93 @@ export function useBloomMotion(): void {
       $$('.h-chip').forEach(chip => {
         const name     = chip.getAttribute('data-habit') ?? '';
         const colorVar = chip.getAttribute('data-color') ?? '';
-        let dragged    = false;
 
-        const onClick = () => { if (!dragged) addHabit(name, colorVar); };
-        chip.addEventListener('click', onClick);
-        cleanupFns.push(() => chip.removeEventListener('click', onClick));
+        if (isTouch) {
+          // ── Mobile: native touch drag + tap ──────────────────────────────
+          // GSAP Draggable + click-guard break on touch (onDragStart fires
+          // on tiny movements, blocking taps). Use raw touch events instead.
+          let tx0 = 0, ty0 = 0, moving = false;
 
-        if (!state.reduced) {
-          Draggable.create(chip, {
-            type: 'x,y',
-            zIndexBoost: true,
-            onPress()      { dragged = false; },
-            onDragStart()  { dragged = true; gsap.to(chip, { scale: 1.08, duration: 0.2 }); },
-            onDrag(this: any) {
-              if (!dropzone) return;
-              const r = dropzone.getBoundingClientRect();
-              dropzone.classList.toggle(
-                'hot',
-                this.pointerX > r.left && this.pointerX < r.right &&
-                this.pointerY > r.top  && this.pointerY < r.bottom,
-              );
-            },
-            onDragEnd(this: any) {
-              if (!dropzone) return;
-              const r = dropzone.getBoundingClientRect();
-              const inside = this.pointerX > r.left && this.pointerX < r.right &&
-                             this.pointerY > r.top  && this.pointerY < r.bottom;
-              dropzone.classList.remove('hot');
-              gsap.to(chip, { x: 0, y: 0, scale: 1, duration: 0.7, ease: 'elastic.out(1,0.5)' });
-              if (inside) addHabit(name, colorVar);
-              setTimeout(() => { dragged = false; }, 50);
-            },
+          const onTouchStart = (e: TouchEvent) => {
+            tx0 = e.touches[0].clientX;
+            ty0 = e.touches[0].clientY;
+            moving = false;
+          };
+
+          const onTouchMove = (e: TouchEvent) => {
+            const dx = e.touches[0].clientX - tx0;
+            const dy = e.touches[0].clientY - ty0;
+            if (!moving && Math.hypot(dx, dy) > 8) {
+              moving = true;
+              gsap.to(chip, { scale: 1.08, duration: 0.15 });
+            }
+            if (moving) {
+              e.preventDefault(); // block page scroll while dragging
+              gsap.set(chip, { x: dx, y: dy, zIndex: 200 });
+              if (dropzone) {
+                const r  = dropzone.getBoundingClientRect();
+                const px = e.touches[0].clientX, py = e.touches[0].clientY;
+                dropzone.classList.toggle('hot', px > r.left && px < r.right && py > r.top && py < r.bottom);
+              }
+            }
+          };
+
+          const onTouchEnd = (e: TouchEvent) => {
+            if (!moving) {
+              // tap — add directly
+              addHabit(name, colorVar);
+            } else {
+              // drag end — check drop target
+              const t = e.changedTouches[0];
+              gsap.to(chip, { x: 0, y: 0, scale: 1, zIndex: 'auto', duration: 0.7, ease: 'elastic.out(1,0.5)' });
+              if (dropzone) {
+                const r      = dropzone.getBoundingClientRect();
+                const inside = t.clientX > r.left && t.clientX < r.right &&
+                               t.clientY > r.top  && t.clientY < r.bottom;
+                dropzone.classList.remove('hot');
+                if (inside) addHabit(name, colorVar);
+              }
+            }
+            moving = false;
+          };
+
+          chip.addEventListener('touchstart', onTouchStart, { passive: true });
+          chip.addEventListener('touchmove',  onTouchMove,  { passive: false });
+          chip.addEventListener('touchend',   onTouchEnd,   { passive: true });
+          cleanupFns.push(() => {
+            chip.removeEventListener('touchstart', onTouchStart);
+            chip.removeEventListener('touchmove',  onTouchMove);
+            chip.removeEventListener('touchend',   onTouchEnd);
           });
+
+        } else {
+          // ── Desktop: click + GSAP Draggable ──────────────────────────────
+          let dragged = false;
+
+          const onClick = () => { if (!dragged) addHabit(name, colorVar); };
+          chip.addEventListener('click', onClick);
+          cleanupFns.push(() => chip.removeEventListener('click', onClick));
+
+          if (!state.reduced) {
+            Draggable.create(chip, {
+              type: 'x,y',
+              zIndexBoost: true,
+              onPress()     { dragged = false; },
+              onDragStart() { dragged = true; gsap.to(chip, { scale: 1.08, duration: 0.2 }); },
+              onDrag(this: any) {
+                if (!dropzone) return;
+                dropzone.classList.toggle('hot', (this as any).hitTest(dropzone));
+              },
+              onDragEnd(this: any) {
+                if (!dropzone) return;
+                const inside = (this as any).hitTest(dropzone);
+                dropzone.classList.remove('hot');
+                gsap.to(chip, { x: 0, y: 0, scale: 1, duration: 0.7, ease: 'elastic.out(1,0.5)' });
+                if (inside) addHabit(name, colorVar);
+                setTimeout(() => { dragged = false; }, 50);
+              },
+            });
+          }
         }
       });
       updateCount();
@@ -524,76 +581,6 @@ export function useBloomMotion(): void {
         b.addEventListener('click', handler);
         cleanupFns.push(() => b.removeEventListener('click', handler));
       });
-
-      // ── MOTION CONTROLS PANEL ─────────────────────────────────────────────
-      const speedEl  = $('#speed') as HTMLInputElement | null;
-      const speedVal = $('#speedVal');
-
-      if (speedEl && speedVal) {
-        const handler = () => {
-          state.speed = parseFloat(speedEl.value);
-          speedVal.textContent = state.speed.toFixed(1) + '×';
-          gsap.globalTimeline.timeScale(state.speed);
-        };
-        speedEl.addEventListener('input', handler);
-        cleanupFns.push(() => speedEl.removeEventListener('input', handler));
-      }
-
-      $$('#easeSeg button').forEach(b => {
-        const handler = () => {
-          $$('#easeSeg button').forEach(x => x.classList.remove('on'));
-          b.classList.add('on');
-          state.ease = b.getAttribute('data-ease') ?? 'bounce';
-        };
-        b.addEventListener('click', handler);
-        cleanupFns.push(() => b.removeEventListener('click', handler));
-      });
-
-      const reduceSwitch = $('#reduceSwitch');
-      if (reduceSwitch) {
-        const handler = () => {
-          const on = !reduceSwitch.classList.contains('on');
-          reduceSwitch.classList.toggle('on', on);
-          reduceSwitch.setAttribute('aria-checked', String(on));
-          document.body.classList.toggle('reduce-motion', on);
-          if (on) {
-            gsap.globalTimeline.timeScale(6);
-            document.body.classList.remove('has-cursor');
-            if (cursor && ring) gsap.to([cursor, ring], { opacity: 0, duration: 0.2 });
-          } else {
-            gsap.globalTimeline.timeScale(state.speed);
-            if (!isTouch && cursor && ring) {
-              document.body.classList.add('has-cursor');
-              gsap.to([cursor, ring], { opacity: 1, duration: 0.2 });
-            }
-          }
-        };
-        reduceSwitch.addEventListener('click', handler);
-        cleanupFns.push(() => reduceSwitch.removeEventListener('click', handler));
-      }
-
-      const replayBtn = $('#replayBtn');
-      if (replayBtn) {
-        const handler = () => {
-          if (lenis) lenis.scrollTo(0, { immediate: true });
-          else window.scrollTo(0, 0);
-          gsap.set('.chip', { x: 0, y: 0 });
-          if (!document.body.classList.contains('reduce-motion')) playHero();
-        };
-        replayBtn.addEventListener('click', handler);
-        cleanupFns.push(() => replayBtn.removeEventListener('click', handler));
-      }
-
-      const ctlCollapse = $('#ctlCollapse');
-      const controls    = $('#controls');
-      if (ctlCollapse && controls) {
-        const handler = () => {
-          controls.classList.toggle('collapsed');
-          gsap.fromTo(controls, { scale: 0.96 }, { scale: 1, duration: 0.3, ease: 'back.out(2)' });
-        };
-        ctlCollapse.addEventListener('click', handler);
-        cleanupFns.push(() => ctlCollapse.removeEventListener('click', handler));
-      }
 
       const onLoad = () => ScrollTrigger.refresh();
       window.addEventListener('load', onLoad);
